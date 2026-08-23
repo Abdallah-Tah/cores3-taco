@@ -10,6 +10,7 @@ from collections.abc import Awaitable, Callable
 from websockets.asyncio.client import connect
 
 logger = logging.getLogger("taco-hub.realtime")
+SUPPORTED_VOICES = {"cedar", "ash", "echo", "verse"}
 
 SendJson = Callable[[dict], Awaitable[None]]
 SendBytes = Callable[[bytes], Awaitable[None]]
@@ -24,6 +25,15 @@ class RealtimeBridge:
         self.socket = None
         self.receiver: asyncio.Task | None = None
         self.speaking = False
+        self.voice = os.getenv("TACO_REALTIME_VOICE", "cedar")
+
+    async def set_voice(self, voice: str) -> None:
+        if voice not in SUPPORTED_VOICES:
+            raise ValueError(f"Unsupported Taco voice: {voice}")
+        if voice == self.voice:
+            return
+        await self.close()
+        self.voice = voice
 
     async def connect(self) -> None:
         if self.socket is not None:
@@ -62,7 +72,7 @@ class RealtimeBridge:
                             },
                             "output": {
                                 "format": {"type": "audio/pcm"},
-                                "voice": os.getenv("TACO_REALTIME_VOICE", "marin"),
+                                "voice": self.voice,
                             },
                         },
                     },
@@ -131,4 +141,3 @@ class RealtimeBridge:
         if self.socket:
             await self.socket.close()
         self.socket = None
-

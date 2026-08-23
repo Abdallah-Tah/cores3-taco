@@ -101,6 +101,9 @@ async def device_socket(websocket: WebSocket) -> None:
                 await realtime.start_turn()
             elif payload.get("type") == "voice_end":
                 await realtime.finish_turn()
+            elif payload.get("type") == "settings":
+                await realtime.set_voice(str(payload.get("voice", "cedar")))
+                device["voice"] = realtime.voice
     except (WebSocketDisconnect, TimeoutError, json.JSONDecodeError):
         pass
     finally:

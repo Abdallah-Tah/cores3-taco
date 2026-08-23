@@ -34,6 +34,8 @@ CoreS3 Taco
 - Systemd-managed Taco Hub with health and device APIs
 - Touch-and-hold voice turns with OpenAI Realtime speech-to-speech playback
 - Animated listening, thinking, speaking, and error states
+- Persistent on-device settings for volume, brightness, Wi-Fi, and voice
+- Selectable male Taco voices: Cedar, Ash, Echo, and Verse
 
 The current PlatformIO firmware lives at the repository root. The Pi gateway
 is in `taco-hub/`, and the device protocol is documented in
@@ -61,6 +63,10 @@ pio run --target upload --upload-port /dev/cu.usbmodem101
 The same `TACO_DEVICE_TOKEN` must be stored in the Pi service environment.
 Generated builds, managed components, local SDKs, credentials, and device
 backups are intentionally excluded from version control.
+
+Swipe through Face, Home, Status, and Settings. Settings are stored in CoreS3
+NVS and survive restarts. The Wi-Fi row requires a confirmation tap before it
+opens the captive portal.
 
 Hardware target: M5Stack CoreS3 / ESP32-S3, 16 MB flash, 8 MB PSRAM.
 

@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <M5Unified.h>
+#include <Preferences.h>
 #include <PubSubClient.h>
 #include <WebSocketsClient.h>
 #include <WiFi.h>
@@ -26,7 +27,7 @@ constexpr size_t MIC_CHUNK_SAMPLES = 960;
 constexpr size_t SPEAKER_CHUNK_SAMPLES = 2400;
 
 enum class Mood : uint8_t { Happy, Curious, Sleepy, Surprised, Grumpy };
-enum class Screen : uint8_t { Face, Home, Status };
+enum class Screen : uint8_t { Face, Home, Status, Settings };
 
 struct TouchGesture {
   bool tracking = false;
@@ -42,6 +43,8 @@ M5Canvas canvas(&M5.Display);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
 WebSocketsClient hubSocket;
+WiFiManager wifiManager;
+Preferences preferences;
 TouchGesture touch;
 Mood mood = Mood::Happy;
 Screen screen = Screen::Face;
@@ -72,6 +75,15 @@ float targetGazeY = 0.0f;
 float touchGlow = 0.0f;
 String notification;
 uint32_t notificationUntil = 0;
+uint8_t speakerVolume = AppConfig::SPEAKER_VOLUME;
+uint8_t screenBrightness = 120;
+uint8_t voiceIndex = 0;
+uint32_t wifiConfirmUntil = 0;
+String wifiPortalName;
+
+constexpr const char* VOICE_IDS[] = {"cedar", "ash", "echo", "verse"};
+constexpr const char* VOICE_LABELS[] = {"Cedar", "Ash", "Echo", "Verse"};
+constexpr uint8_t VOICE_COUNT = sizeof(VOICE_IDS) / sizeof(VOICE_IDS[0]);
 
 float clampf(float value, float low, float high) {
   return value < low ? low : (value > high ? high : value);
@@ -97,6 +109,7 @@ const char* screenName(Screen value) {
     case Screen::Face: return "face";
     case Screen::Home: return "home";
     case Screen::Status: return "status";
+    case Screen::Settings: return "settings";
   }
   return "face";
 }
@@ -115,6 +128,7 @@ bool parseScreen(const String& value, Screen& result) {
   if (value == "face") result = Screen::Face;
   else if (value == "home") result = Screen::Home;
   else if (value == "status") result = Screen::Status;
+  else if (value == "settings") result = Screen::Settings;
   else return false;
   return true;
 }
@@ -147,8 +161,8 @@ void setScreen(Screen value, bool announce = true) {
 
 void changeScreen(int direction) {
   int value = static_cast<int>(screen) + direction;
-  if (value < 0) value = 2;
-  if (value > 2) value = 0;
+  if (value < 0) value = 3;
+  if (value > 3) value = 0;
   setScreen(static_cast<Screen>(value));
 }
 
@@ -158,6 +172,18 @@ void showNotification(const String& message) {
   setMood(Mood::Curious);
 }
 
+void saveSettings() {
+  preferences.putUChar("volume", speakerVolume);
+  preferences.putUChar("brightness", screenBrightness);
+  preferences.putUChar("voice", voiceIndex);
+}
+
+void sendDeviceSettings() {
+  if (!hubConnected) return;
+  hubSocket.sendTXT(String("{\"type\":\"settings\",\"voice\":\"") +
+                    VOICE_IDS[voiceIndex] + "\"}");
+}
+
 void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
@@ -165,6 +191,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
                         "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.2\"}");
+      sendDeviceSettings();
       showNotification("Taco Hub connected");
       break;
     case WStype_DISCONNECTED:
@@ -203,7 +230,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       M5.Mic.end();
       if (!speakerReady) {
         M5.Speaker.begin();
-        M5.Speaker.setVolume(AppConfig::SPEAKER_VOLUME);
+        M5.Speaker.setVolume(speakerVolume);
         M5.Speaker.setAllChannelVolume(255);
         speakerReady = true;
       }
@@ -452,11 +479,43 @@ void drawMouth() {
 }
 
 void drawPageDots() {
-  for (int i = 0; i < 3; ++i) {
-    const int x = 148 + i * 12;
+  for (int i = 0; i < 4; ++i) {
+    const int x = 142 + i * 12;
     const bool active = i == static_cast<int>(screen);
     canvas.fillCircle(x, 229, active ? 3 : 2, active ? CYAN : CYAN_DIM);
   }
+}
+
+void drawSettingRow(int y, const char* label, const String& value,
+                    bool adjustable = true) {
+  canvas.fillRoundRect(14, y, 292, 39, 11, PANEL);
+  canvas.setTextDatum(middle_left);
+  canvas.setTextSize(1);
+  canvas.setTextColor(WHITE, PANEL);
+  canvas.drawString(label, 27, y + 20);
+  canvas.setTextDatum(middle_right);
+  canvas.setTextColor(CYAN, PANEL);
+  canvas.drawString(value, 279, y + 20);
+  if (adjustable) {
+    canvas.setTextDatum(middle_center);
+    canvas.setTextColor(MUTED, PANEL);
+    canvas.drawString("<", 180, y + 20);
+    canvas.drawString(">", 294, y + 20);
+  }
+}
+
+void drawNotification();
+void drawHeader(const char* title);
+
+void drawSettings() {
+  canvas.fillScreen(BG);
+  drawHeader("SETTINGS");
+  drawSettingRow(44, "Volume", String((speakerVolume * 100) / 255) + "%");
+  drawSettingRow(87, "Brightness", String((screenBrightness * 100) / 255) + "%");
+  drawSettingRow(130, "Voice", VOICE_LABELS[voiceIndex]);
+  drawSettingRow(173, "Wi-Fi", "Change network", false);
+  drawNotification();
+  drawPageDots();
 }
 
 void drawNotification() {
@@ -553,6 +612,7 @@ void drawCurrentScreen(uint32_t now) {
     case Screen::Face: drawFace(now); break;
     case Screen::Home: drawHome(); break;
     case Screen::Status: drawStatus(); break;
+    case Screen::Settings: drawSettings(); break;
   }
   canvas.pushSprite(0, 0);
 }
@@ -569,6 +629,48 @@ void triggerHomeAction(int x, int y) {
 void handleTap(int x, int y) {
   if (screen == Screen::Face) nextMood();
   else if (screen == Screen::Home) triggerHomeAction(x, y);
+  else if (screen == Screen::Settings) {
+    const int direction = x < 235 ? -1 : 1;
+    if (y >= 44 && y < 84) {
+      int value = speakerVolume + direction * 26;
+      speakerVolume = static_cast<uint8_t>(constrain(value, 25, 255));
+      M5.Speaker.setVolume(speakerVolume);
+      saveSettings();
+    } else if (y >= 87 && y < 127) {
+      int value = screenBrightness + direction * 25;
+      screenBrightness = static_cast<uint8_t>(constrain(value, 25, 255));
+      M5.Display.setBrightness(screenBrightness);
+      saveSettings();
+    } else if (y >= 130 && y < 170) {
+      int value = static_cast<int>(voiceIndex) + direction;
+      if (value < 0) value = VOICE_COUNT - 1;
+      if (value >= VOICE_COUNT) value = 0;
+      voiceIndex = static_cast<uint8_t>(value);
+      saveSettings();
+      sendDeviceSettings();
+      showNotification(String("Voice: ") + VOICE_LABELS[voiceIndex]);
+    } else if (y >= 173 && y < 216) {
+      if (millis() > wifiConfirmUntil) {
+        wifiConfirmUntil = millis() + 4000;
+        showNotification("Tap Wi-Fi again to change");
+      } else {
+        canvas.fillScreen(BG);
+        canvas.setTextDatum(middle_center);
+        canvas.setTextColor(CYAN, BG);
+        canvas.setTextSize(2);
+        canvas.drawString("WI-FI SETUP", 160, 70);
+        canvas.setTextSize(1);
+        canvas.setTextColor(WHITE, BG);
+        canvas.drawString(String("Connect to ") + wifiPortalName, 160, 120);
+        canvas.drawString("Open 192.168.4.1", 160, 150);
+        canvas.pushSprite(0, 0);
+        hubSocket.disconnect();
+        wifiManager.setConfigPortalTimeout(180);
+        wifiManager.startConfigPortal(wifiPortalName.c_str());
+        ESP.restart();
+      }
+    }
+  }
 }
 
 void handleTouch() {
@@ -623,8 +725,14 @@ void setup() {
   config.clear_display = true;
   config.output_power = true;
   M5.begin(config);
+  preferences.begin("taco", false);
+  speakerVolume = preferences.getUChar("volume", AppConfig::SPEAKER_VOLUME);
+  screenBrightness = preferences.getUChar("brightness", 120);
+  voiceIndex = preferences.getUChar("voice", 0);
+  if (voiceIndex >= VOICE_COUNT) voiceIndex = 0;
   M5.Display.setRotation(1);
-  M5.Display.setBrightness(120);
+  M5.Display.setBrightness(screenBrightness);
+  M5.Speaker.setVolume(speakerVolume);
   canvas.setColorDepth(16);
   if (!canvas.createSprite(320, 240)) {
     M5.Display.fillScreen(TFT_RED);
@@ -636,10 +744,9 @@ void setup() {
   mqtt.setCallback(onMqttMessage);
   mqtt.setBufferSize(1400);
   WiFi.mode(WIFI_STA);
-  WiFiManager wifiManager;
   wifiManager.setConfigPortalTimeout(180);
-  const String portalName = String("Taco-") +
-                            String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX).substring(4);
+  wifiPortalName = String("Taco-") +
+                   String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX).substring(4);
   canvas.fillScreen(BG);
   canvas.setTextDatum(middle_center);
   canvas.setTextColor(TFT_CYAN, TFT_BLACK);
@@ -647,12 +754,12 @@ void setup() {
   canvas.drawString("WI-FI SETUP", 160, 62);
   canvas.setTextColor(TFT_WHITE, TFT_BLACK);
   canvas.setTextSize(1);
-  canvas.drawString(String("Connect to ") + portalName, 160, 112);
+  canvas.drawString(String("Connect to ") + wifiPortalName, 160, 112);
   canvas.setTextColor(0x7BEF, TFT_BLACK);
   canvas.drawString("Then open 192.168.4.1", 160, 142);
   canvas.drawString("Taco will remember your network", 160, 174);
   canvas.pushSprite(0, 0);
-  if (!wifiManager.autoConnect(portalName.c_str())) {
+  if (!wifiManager.autoConnect(wifiPortalName.c_str())) {
     showNotification("Wi-Fi setup needed");
   }
   if (WiFi.status() == WL_CONNECTED && AppConfig::DEVICE_TOKEN[0] != '\0') {

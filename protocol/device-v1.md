@@ -28,6 +28,10 @@ sends `voice_start`, followed by binary 24 kHz mono PCM16 chunks, followed by
 24 kHz mono PCM16 response chunks. Output chunks are limited to 4,800 bytes so
 the CoreS3 can maintain a small, deterministic speaker buffer ring.
 
+The device sends `settings` with its selected voice after connecting and when
+the user changes it. Taco Hub validates the voice and applies it to the next
+Realtime session.
+
 At startup, Taco probes the private LAN hub briefly. If it is unavailable, the
 device connects over TLS to `taco-hub.buildwithabdallah.com`. The same device
 token authenticates both routes; the Cloudflare Tunnel does not require an
