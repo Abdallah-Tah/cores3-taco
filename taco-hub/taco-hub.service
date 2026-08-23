@@ -1,0 +1,22 @@
+[Unit]
+Description=Taco Hub device gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=abdaltm86
+Group=abdaltm86
+WorkingDirectory=/opt/taco-hub
+EnvironmentFile=/etc/taco-hub.env
+ExecStart=/opt/taco-hub/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/taco-hub
+
+[Install]
+WantedBy=multi-user.target

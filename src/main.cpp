@@ -1,7 +1,9 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <PubSubClient.h>
+#include <WebSocketsClient.h>
 #include <WiFi.h>
+#include <WiFiManager.h>
 #include <math.h>
 
 #include "AppConfig.h"
@@ -35,6 +37,7 @@ struct TouchGesture {
 M5Canvas canvas(&M5.Display);
 WiFiClient wifiClient;
 PubSubClient mqtt(wifiClient);
+WebSocketsClient hubSocket;
 TouchGesture touch;
 Mood mood = Mood::Happy;
 Screen screen = Screen::Face;
@@ -45,6 +48,9 @@ uint32_t lastWiFiAttemptAt = 0;
 uint32_t lastMqttAttemptAt = 0;
 bool blinking = false;
 bool discoveryPublished = false;
+bool hubConnected = false;
+uint32_t lastHubStatusAt = 0;
+String hubAuthHeader;
 float gazeX = 0.0f;
 float gazeY = 0.0f;
 float targetGazeX = 0.0f;
@@ -136,6 +142,40 @@ void showNotification(const String& message) {
   notification = message.substring(0, 64);
   notificationUntil = millis() + 8000;
   setMood(Mood::Curious);
+}
+
+void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      hubConnected = true;
+      hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
+                        AppConfig::DEVICE_ID +
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.2\"}");
+      showNotification("Taco Hub connected");
+      break;
+    case WStype_DISCONNECTED:
+      hubConnected = false;
+      break;
+    case WStype_TEXT:
+      if (length && strstr(reinterpret_cast<const char*>(payload), "hello_ack")) {
+        setMood(Mood::Happy, false);
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+void serviceHub(uint32_t now) {
+  if (WiFi.status() != WL_CONNECTED) return;
+  hubSocket.loop();
+  if (!hubConnected || now - lastHubStatusAt < 15000) return;
+  lastHubStatusAt = now;
+  String status = String("{\"type\":\"status\",\"battery\":") +
+                  M5.Power.getBatteryLevel() + ",\"rssi\":" + WiFi.RSSI() +
+                  ",\"uptime\":" + now / 1000 +
+                  ",\"screen\":\"" + screenName(screen) + "\"}";
+  hubSocket.sendTXT(status);
 }
 
 String deviceJson() {
@@ -398,7 +438,7 @@ void drawStatus() {
   drawStatusRow(67, "Battery", String(M5.Power.getBatteryLevel()) + "%");
   drawStatusRow(104, "Wi-Fi",
                 WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm" : "Not connected");
-  drawStatusRow(141, "Home Assistant", mqtt.connected() ? "Connected" : "Not connected");
+  drawStatusRow(141, "Taco Hub", hubConnected ? "Connected" : "Not connected");
   drawStatusRow(178, "IP address",
                 WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "--");
   drawPageDots();
@@ -480,6 +520,33 @@ void setup() {
   mqtt.setServer(AppConfig::MQTT_HOST, AppConfig::MQTT_PORT);
   mqtt.setCallback(onMqttMessage);
   mqtt.setBufferSize(1400);
+  WiFi.mode(WIFI_STA);
+  WiFiManager wifiManager;
+  wifiManager.setConfigPortalTimeout(180);
+  const String portalName = String("Taco-") +
+                            String(static_cast<uint32_t>(ESP.getEfuseMac()), HEX).substring(4);
+  canvas.fillScreen(BG);
+  canvas.setTextDatum(middle_center);
+  canvas.setTextColor(TFT_CYAN, TFT_BLACK);
+  canvas.setTextSize(2);
+  canvas.drawString("WI-FI SETUP", 160, 62);
+  canvas.setTextColor(TFT_WHITE, TFT_BLACK);
+  canvas.setTextSize(1);
+  canvas.drawString(String("Connect to ") + portalName, 160, 112);
+  canvas.setTextColor(0x7BEF, TFT_BLACK);
+  canvas.drawString("Then open 192.168.4.1", 160, 142);
+  canvas.drawString("Taco will remember your network", 160, 174);
+  canvas.pushSprite(0, 0);
+  if (!wifiManager.autoConnect(portalName.c_str())) {
+    showNotification("Wi-Fi setup needed");
+  }
+  if (WiFi.status() == WL_CONNECTED && AppConfig::DEVICE_TOKEN[0] != '\0') {
+    hubAuthHeader = String("Authorization: Bearer ") + AppConfig::DEVICE_TOKEN + "\r\n";
+    hubSocket.setExtraHeaders(hubAuthHeader.c_str());
+    hubSocket.begin(AppConfig::HUB_HOST, AppConfig::HUB_PORT, AppConfig::HUB_PATH);
+    hubSocket.onEvent(onHubEvent);
+    hubSocket.setReconnectInterval(3000);
+  }
   nextBlinkAt = millis() + 1800;
 }
 
@@ -487,7 +554,7 @@ void loop() {
   M5.update();
   const uint32_t now = millis();
   handleTouch();
-  serviceNetwork(now);
+  serviceHub(now);
   gazeX += (targetGazeX - gazeX) * 0.14f;
   gazeY += (targetGazeY - gazeY) * 0.14f;
   touchGlow *= 0.92f;

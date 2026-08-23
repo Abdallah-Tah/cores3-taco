@@ -1,0 +1,1 @@
+"""Taco Hub application package."""
