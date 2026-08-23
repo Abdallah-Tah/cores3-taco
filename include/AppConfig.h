@@ -33,9 +33,9 @@ constexpr uint16_t MQTT_PORT = COMPANION_MQTT_PORT;
 constexpr char MQTT_USERNAME[] = COMPANION_MQTT_USERNAME;
 constexpr char MQTT_PASSWORD[] = COMPANION_MQTT_PASSWORD;
 
-constexpr char DEVICE_NAME[] = "CoreS3 Companion";
-constexpr char DEVICE_ID[] = "cores3_companion";
-constexpr char TOPIC_PREFIX[] = "cores3/companion";
+constexpr char DEVICE_NAME[] = "Taco";
+constexpr char DEVICE_ID[] = "cores3_taco";
+constexpr char TOPIC_PREFIX[] = "taco/device";
 
 // Home Assistant receives an event on cores3/companion/action when tapped.
 constexpr char ACTION_1[] = "Lights";

@@ -141,8 +141,8 @@ void showNotification(const String& message) {
 String deviceJson() {
   return String("\"device\":{\"identifiers\":[\"") + AppConfig::DEVICE_ID +
          "\"],\"name\":\"" + AppConfig::DEVICE_NAME +
-         "\",\"manufacturer\":\"M5Stack\",\"model\":\"CoreS3\","
-         "\"sw_version\":\"0.2.0\"}";
+          "\",\"manufacturer\":\"Taco Project\",\"model\":\"CoreS3\","
+          "\"sw_version\":\"1.0.0-alpha.1\"}";
 }
 
 void publishDiscoveryEntity(const String& component, const String& objectId,
@@ -394,7 +394,7 @@ void drawStatusRow(int y, const char* label, const String& value) {
 
 void drawStatus() {
   canvas.fillScreen(BG);
-  drawHeader("DEVICE");
+  drawHeader("TACO");
   drawStatusRow(67, "Battery", String(M5.Power.getBatteryLevel()) + "%");
   drawStatusRow(104, "Wi-Fi",
                 WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm" : "Not connected");
