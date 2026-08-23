@@ -29,6 +29,7 @@ CoreS3 Taco
 - Touch gestures and Home/Status screens
 - Captive-portal Wi-Fi provisioning
 - Authenticated CoreS3-to-Pi WebSocket connection
+- Automatic local Wi-Fi or Cloudflare Tunnel connection
 - Battery, Wi-Fi, uptime, and screen-state heartbeat
 - Systemd-managed Taco Hub with health and device APIs
 

@@ -49,6 +49,7 @@ uint32_t lastMqttAttemptAt = 0;
 bool blinking = false;
 bool discoveryPublished = false;
 bool hubConnected = false;
+bool hubUsingCloudflare = false;
 uint32_t lastHubStatusAt = 0;
 String hubAuthHeader;
 float gazeX = 0.0f;
@@ -438,7 +439,9 @@ void drawStatus() {
   drawStatusRow(67, "Battery", String(M5.Power.getBatteryLevel()) + "%");
   drawStatusRow(104, "Wi-Fi",
                 WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm" : "Not connected");
-  drawStatusRow(141, "Taco Hub", hubConnected ? "Connected" : "Not connected");
+  drawStatusRow(141, "Taco Hub",
+                hubConnected ? (hubUsingCloudflare ? "Cloud" : "Local")
+                             : "Not connected");
   drawStatusRow(178, "IP address",
                 WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "--");
   drawPageDots();
@@ -543,9 +546,21 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED && AppConfig::DEVICE_TOKEN[0] != '\0') {
     hubAuthHeader = String("Authorization: Bearer ") + AppConfig::DEVICE_TOKEN + "\r\n";
     hubSocket.setExtraHeaders(hubAuthHeader.c_str());
-    hubSocket.begin(AppConfig::HUB_HOST, AppConfig::HUB_PORT, AppConfig::HUB_PATH);
     hubSocket.onEvent(onHubEvent);
     hubSocket.setReconnectInterval(3000);
+    WiFiClient hubProbe;
+    const bool localHubAvailable = AppConfig::HUB_HOST[0] != '\0' &&
+                                   hubProbe.connect(AppConfig::HUB_HOST,
+                                                    AppConfig::HUB_PORT, 750);
+    hubProbe.stop();
+    if (localHubAvailable) {
+      hubSocket.begin(AppConfig::HUB_HOST, AppConfig::HUB_PORT,
+                      AppConfig::HUB_PATH);
+    } else {
+      hubUsingCloudflare = true;
+      hubSocket.beginSSL(AppConfig::HUB_REMOTE_HOST, AppConfig::HUB_REMOTE_PORT,
+                         AppConfig::HUB_PATH);
+    }
   }
   nextBlinkAt = millis() + 1800;
 }

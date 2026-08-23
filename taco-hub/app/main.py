@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -52,6 +53,7 @@ async def device_socket(websocket: WebSocket) -> None:
 
     await websocket.accept()
     device_id = "unknown"
+    session_id = uuid.uuid4().hex
     try:
         hello = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         if hello.get("type") != "hello" or not hello.get("device_id"):
@@ -60,6 +62,7 @@ async def device_socket(websocket: WebSocket) -> None:
 
         device_id = str(hello["device_id"])
         devices[device_id] = {
+            "session_id": session_id,
             "device_id": device_id,
             "firmware": hello.get("firmware", "unknown"),
             "hardware": hello.get("hardware", "unknown"),
@@ -76,15 +79,19 @@ async def device_socket(websocket: WebSocket) -> None:
         while True:
             message = await websocket.receive_text()
             payload = json.loads(message)
-            devices[device_id]["last_seen"] = utc_now()
+            device = devices.get(device_id)
+            if not device or device.get("session_id") != session_id:
+                await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
+                return
+            device["last_seen"] = utc_now()
             if payload.get("type") == "status":
-                devices[device_id]["status"] = payload
+                device["status"] = payload
                 await websocket.send_json({"type": "status_ack", "time": utc_now()})
             elif payload.get("type") == "ping":
                 await websocket.send_json({"type": "pong", "time": utc_now()})
     except (WebSocketDisconnect, TimeoutError, json.JSONDecodeError):
         pass
     finally:
-        if device_id in devices:
+        if devices.get(device_id, {}).get("session_id") == session_id:
             devices.pop(device_id, None)
         logger.info("device disconnected: %s", device_id)
