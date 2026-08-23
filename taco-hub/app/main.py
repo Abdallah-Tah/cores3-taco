@@ -56,7 +56,17 @@ async def device_socket(websocket: WebSocket) -> None:
     await websocket.accept()
     device_id = "unknown"
     session_id = uuid.uuid4().hex
-    realtime = RealtimeBridge(websocket.send_json, websocket.send_bytes)
+    send_lock = asyncio.Lock()
+
+    async def send_json(payload: dict) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
+
+    async def send_bytes(payload: bytes) -> None:
+        async with send_lock:
+            await websocket.send_bytes(payload)
+
+    realtime = RealtimeBridge(send_json, send_bytes)
     try:
         hello = await asyncio.wait_for(websocket.receive_json(), timeout=10)
         if hello.get("type") != "hello" or not hello.get("device_id"):
@@ -75,7 +85,7 @@ async def device_socket(websocket: WebSocket) -> None:
             "status": {},
         }
         logger.info("device connected: %s", device_id)
-        await websocket.send_json(
+        await send_json(
             {"type": "hello_ack", "server": "taco-hub", "time": utc_now()}
         )
 
@@ -94,13 +104,19 @@ async def device_socket(websocket: WebSocket) -> None:
             payload = json.loads(message.get("text") or "{}")
             if payload.get("type") == "status":
                 device["status"] = payload
-                await websocket.send_json({"type": "status_ack", "time": utc_now()})
+                await send_json({"type": "status_ack", "time": utc_now()})
             elif payload.get("type") == "ping":
-                await websocket.send_json({"type": "pong", "time": utc_now()})
+                await send_json({"type": "pong", "time": utc_now()})
             elif payload.get("type") == "voice_start":
                 await realtime.start_turn()
             elif payload.get("type") == "voice_end":
                 await realtime.finish_turn()
+            elif payload.get("type") == "voice_cancel":
+                await realtime.cancel_turn()
+            elif payload.get("type") == "conversation_start":
+                await realtime.start_conversation()
+            elif payload.get("type") == "conversation_stop":
+                await realtime.stop_conversation()
             elif payload.get("type") == "settings":
                 await realtime.set_voice(str(payload.get("voice", "cedar")))
                 device["voice"] = realtime.voice

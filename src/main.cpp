@@ -59,10 +59,14 @@ bool hubConnected = false;
 bool hubUsingCloudflare = false;
 bool voiceRecording = false;
 bool voiceSpeaking = false;
+bool conversationActive = false;
+bool resumeListeningPending = false;
+uint32_t resumeListeningAt = 0;
 bool speakerReady = false;
 uint8_t micRecordIndex = 2;
 uint8_t micSendIndex = 0;
 uint8_t micWarmup = 0;
+uint16_t voiceChunksSent = 0;
 uint8_t speakerBufferIndex = 0;
 int16_t micBuffers[3][MIC_CHUNK_SAMPLES] = {};
 int16_t speakerBuffers[3][SPEAKER_CHUNK_SAMPLES] = {};
@@ -81,8 +85,8 @@ uint8_t voiceIndex = 0;
 uint32_t wifiConfirmUntil = 0;
 String wifiPortalName;
 
-constexpr const char* VOICE_IDS[] = {"cedar", "ash", "echo", "verse"};
-constexpr const char* VOICE_LABELS[] = {"Cedar", "Ash", "Echo", "Verse"};
+constexpr const char* VOICE_IDS[] = {"cedar", "ash", "echo", "verse", "edge"};
+constexpr const char* VOICE_LABELS[] = {"Cedar", "Ash", "Echo", "Verse", "Edge TTS"};
 constexpr uint8_t VOICE_COUNT = sizeof(VOICE_IDS) / sizeof(VOICE_IDS[0]);
 
 float clampf(float value, float low, float high) {
@@ -184,18 +188,63 @@ void sendDeviceSettings() {
                     VOICE_IDS[voiceIndex] + "\"}");
 }
 
+void beginListening() {
+  if (!conversationActive || voiceRecording || !hubConnected || M5.Speaker.isPlaying()) return;
+  M5.Speaker.end();
+  speakerReady = false;
+  M5.Mic.begin();
+  memset(micBuffers, 0, sizeof(micBuffers));
+  voiceChunksSent = 0;
+  voiceRecording = true;
+  voiceSpeaking = false;
+  setMood(Mood::Curious, false);
+}
+
+void pauseListening() {
+  if (!voiceRecording) return;
+  voiceRecording = false;
+  while (M5.Mic.isRecording()) delay(1);
+  M5.Mic.end();
+}
+
+void toggleConversation() {
+  if (!hubConnected) {
+    showNotification("Taco Hub is offline");
+    return;
+  }
+  if (conversationActive) {
+    conversationActive = false;
+    resumeListeningPending = false;
+    pauseListening();
+    M5.Speaker.end();
+    speakerReady = false;
+    voiceSpeaking = false;
+    hubSocket.sendTXT("{\"type\":\"conversation_stop\"}");
+    setMood(Mood::Happy, false);
+    showNotification("Conversation ended");
+    return;
+  }
+  conversationActive = true;
+  hubSocket.sendTXT("{\"type\":\"conversation_start\"}");
+  beginListening();
+  showNotification("Listening... tap to stop");
+}
+
 void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
   switch (type) {
     case WStype_CONNECTED:
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.2\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.4\"}");
       sendDeviceSettings();
       showNotification("Taco Hub connected");
       break;
     case WStype_DISCONNECTED:
       hubConnected = false;
+      conversationActive = false;
+      resumeListeningPending = false;
+      pauseListening();
       break;
     case WStype_TEXT:
       if (!length) break;
@@ -206,15 +255,24 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
         if (message.indexOf("hello_ack") >= 0) {
           setMood(Mood::Happy, false);
         } else if (message.indexOf("\"state\":\"listening\"") >= 0) {
-          showNotification("Listening...");
+          if (conversationActive) {
+            resumeListeningPending = true;
+            resumeListeningAt = millis() + 120;
+            beginListening();
+          }
+          showNotification(conversationActive ? "Listening... tap to stop" : "Listening...");
         } else if (message.indexOf("\"state\":\"thinking\"") >= 0) {
+          pauseListening();
           setMood(Mood::Sleepy, false);
           showNotification("Thinking...");
         } else if (message.indexOf("\"state\":\"speaking\"") >= 0) {
+          pauseListening();
           voiceSpeaking = true;
           setMood(Mood::Happy, false);
           showNotification("Taco is speaking");
         } else if (message.indexOf("\"state\":\"idle\"") >= 0) {
+          pauseListening();
+          resumeListeningPending = false;
           voiceSpeaking = false;
           setMood(Mood::Happy, false);
           notificationUntil = 0;
@@ -246,53 +304,27 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 }
 
-void startVoice() {
-  if (!hubConnected || voiceRecording) {
-    if (!hubConnected) showNotification("Taco Hub is offline");
-    return;
-  }
-  voiceSpeaking = false;
-  M5.Speaker.end();
-  speakerReady = false;
-  M5.Mic.begin();
-  memset(micBuffers, 0, sizeof(micBuffers));
-  micRecordIndex = 2;
-  micSendIndex = 0;
-  micWarmup = 0;
-  voiceRecording = true;
-  hubSocket.sendTXT("{\"type\":\"voice_start\"}");
-  setMood(Mood::Curious, false);
-  showNotification("Listening... release to send");
-}
-
-void stopVoice() {
-  if (!voiceRecording) return;
-  voiceRecording = false;
-  while (M5.Mic.isRecording()) delay(1);
-  M5.Mic.end();
-  hubSocket.sendTXT("{\"type\":\"voice_end\"}");
-  setMood(Mood::Sleepy, false);
-  showNotification("Thinking...");
-}
-
 void serviceVoice() {
   if (!voiceRecording || !hubConnected) return;
-  if (M5.Mic.record(micBuffers[micRecordIndex], MIC_CHUNK_SAMPLES,
-                    VOICE_SAMPLE_RATE, false)) {
-    if (micWarmup >= 2) {
-      hubSocket.sendBIN(reinterpret_cast<uint8_t*>(micBuffers[micSendIndex]),
+  auto* input = micBuffers[0];
+  if (M5.Mic.record(input, MIC_CHUNK_SAMPLES, VOICE_SAMPLE_RATE, false)) {
+    while (voiceRecording && M5.Mic.isRecording()) delay(1);
+    if (voiceRecording) {
+      hubSocket.sendBIN(reinterpret_cast<uint8_t*>(input),
                         MIC_CHUNK_SAMPLES * sizeof(int16_t));
-    } else {
-      ++micWarmup;
+      ++voiceChunksSent;
     }
-    micRecordIndex = (micRecordIndex + 1) % 3;
-    micSendIndex = (micSendIndex + 1) % 3;
   }
 }
 
 void serviceHub(uint32_t now) {
   if (WiFi.status() != WL_CONNECTED) return;
   hubSocket.loop();
+  if (resumeListeningPending && conversationActive && now >= resumeListeningAt &&
+      !M5.Speaker.isPlaying()) {
+    resumeListeningPending = false;
+    beginListening();
+  }
   if (!hubConnected || now - lastHubStatusAt < 15000) return;
   lastHubStatusAt = now;
   String status = String("{\"type\":\"status\",\"battery\":") +
@@ -627,7 +659,7 @@ void triggerHomeAction(int x, int y) {
 }
 
 void handleTap(int x, int y) {
-  if (screen == Screen::Face) nextMood();
+  if (screen == Screen::Face) toggleConversation();
   else if (screen == Screen::Home) triggerHomeAction(x, y);
   else if (screen == Screen::Settings) {
     const int direction = x < 235 ? -1 : 1;
@@ -695,19 +727,11 @@ void handleTouch() {
   if (touch.tracking && detail.isPressed()) {
     touch.x = detail.x;
     touch.y = detail.y;
-    if (!touch.voiceStarted && screen == Screen::Face &&
-        millis() - touch.startedAt >= 400) {
-      touch.voiceStarted = true;
-      startVoice();
-    }
+    const int moveX = detail.x - touch.startX;
+    const int moveY = detail.y - touch.startY;
   }
   if (touch.tracking && detail.wasReleased()) {
     touch.tracking = false;
-    if (touch.voiceStarted) {
-      touch.voiceStarted = false;
-      stopVoice();
-      return;
-    }
     const int deltaX = touch.x - touch.startX;
     const int deltaY = touch.y - touch.startY;
     if (abs(deltaX) > 65 && abs(deltaX) > abs(deltaY)) {
