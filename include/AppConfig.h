@@ -48,6 +48,7 @@ constexpr char HUB_PATH[] = "/device/v1";
 constexpr char HUB_REMOTE_HOST[] = "taco-hub.buildwithabdallah.com";
 constexpr uint16_t HUB_REMOTE_PORT = 443;
 constexpr char DEVICE_TOKEN[] = TACO_DEVICE_TOKEN;
+constexpr uint8_t SPEAKER_VOLUME = 255;
 
 // Home Assistant receives an event on cores3/companion/action when tapped.
 constexpr char ACTION_1[] = "Lights";

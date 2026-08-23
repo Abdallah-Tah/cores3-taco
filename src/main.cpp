@@ -21,6 +21,9 @@ constexpr uint16_t MUTED = 0x7BEF;
 constexpr uint32_t STATUS_PUBLISH_INTERVAL_MS = 30000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;
 constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
+constexpr uint32_t VOICE_SAMPLE_RATE = 24000;
+constexpr size_t MIC_CHUNK_SAMPLES = 960;
+constexpr size_t SPEAKER_CHUNK_SAMPLES = 2400;
 
 enum class Mood : uint8_t { Happy, Curious, Sleepy, Surprised, Grumpy };
 enum class Screen : uint8_t { Face, Home, Status };
@@ -32,6 +35,7 @@ struct TouchGesture {
   int x = 0;
   int y = 0;
   uint32_t startedAt = 0;
+  bool voiceStarted = false;
 };
 
 M5Canvas canvas(&M5.Display);
@@ -50,6 +54,15 @@ bool blinking = false;
 bool discoveryPublished = false;
 bool hubConnected = false;
 bool hubUsingCloudflare = false;
+bool voiceRecording = false;
+bool voiceSpeaking = false;
+bool speakerReady = false;
+uint8_t micRecordIndex = 2;
+uint8_t micSendIndex = 0;
+uint8_t micWarmup = 0;
+uint8_t speakerBufferIndex = 0;
+int16_t micBuffers[3][MIC_CHUNK_SAMPLES] = {};
+int16_t speakerBuffers[3][SPEAKER_CHUNK_SAMPLES] = {};
 uint32_t lastHubStatusAt = 0;
 String hubAuthHeader;
 float gazeX = 0.0f;
@@ -158,12 +171,95 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = false;
       break;
     case WStype_TEXT:
-      if (length && strstr(reinterpret_cast<const char*>(payload), "hello_ack")) {
-        setMood(Mood::Happy, false);
+      if (!length) break;
+      {
+        String message;
+        message.reserve(length + 1);
+        for (size_t i = 0; i < length; ++i) message += static_cast<char>(payload[i]);
+        if (message.indexOf("hello_ack") >= 0) {
+          setMood(Mood::Happy, false);
+        } else if (message.indexOf("\"state\":\"listening\"") >= 0) {
+          showNotification("Listening...");
+        } else if (message.indexOf("\"state\":\"thinking\"") >= 0) {
+          setMood(Mood::Sleepy, false);
+          showNotification("Thinking...");
+        } else if (message.indexOf("\"state\":\"speaking\"") >= 0) {
+          voiceSpeaking = true;
+          setMood(Mood::Happy, false);
+          showNotification("Taco is speaking");
+        } else if (message.indexOf("\"state\":\"idle\"") >= 0) {
+          voiceSpeaking = false;
+          setMood(Mood::Happy, false);
+          notificationUntil = 0;
+        } else if (message.indexOf("\"state\":\"error\"") >= 0) {
+          voiceSpeaking = false;
+          setMood(Mood::Grumpy, false);
+          showNotification("Voice service error");
+        }
       }
       break;
+    case WStype_BIN: {
+      if (!length || voiceRecording) break;
+      M5.Mic.end();
+      if (!speakerReady) {
+        M5.Speaker.begin();
+        M5.Speaker.setVolume(AppConfig::SPEAKER_VOLUME);
+        M5.Speaker.setAllChannelVolume(255);
+        speakerReady = true;
+      }
+      const size_t samples = min(length / sizeof(int16_t), SPEAKER_CHUNK_SAMPLES);
+      auto* output = speakerBuffers[speakerBufferIndex];
+      memcpy(output, payload, samples * sizeof(int16_t));
+      M5.Speaker.playRaw(output, samples, VOICE_SAMPLE_RATE, false, 1, 0);
+      speakerBufferIndex = (speakerBufferIndex + 1) % 3;
+      break;
+    }
     default:
       break;
+  }
+}
+
+void startVoice() {
+  if (!hubConnected || voiceRecording) {
+    if (!hubConnected) showNotification("Taco Hub is offline");
+    return;
+  }
+  voiceSpeaking = false;
+  M5.Speaker.end();
+  speakerReady = false;
+  M5.Mic.begin();
+  memset(micBuffers, 0, sizeof(micBuffers));
+  micRecordIndex = 2;
+  micSendIndex = 0;
+  micWarmup = 0;
+  voiceRecording = true;
+  hubSocket.sendTXT("{\"type\":\"voice_start\"}");
+  setMood(Mood::Curious, false);
+  showNotification("Listening... release to send");
+}
+
+void stopVoice() {
+  if (!voiceRecording) return;
+  voiceRecording = false;
+  while (M5.Mic.isRecording()) delay(1);
+  M5.Mic.end();
+  hubSocket.sendTXT("{\"type\":\"voice_end\"}");
+  setMood(Mood::Sleepy, false);
+  showNotification("Thinking...");
+}
+
+void serviceVoice() {
+  if (!voiceRecording || !hubConnected) return;
+  if (M5.Mic.record(micBuffers[micRecordIndex], MIC_CHUNK_SAMPLES,
+                    VOICE_SAMPLE_RATE, false)) {
+    if (micWarmup >= 2) {
+      hubSocket.sendBIN(reinterpret_cast<uint8_t*>(micBuffers[micSendIndex]),
+                        MIC_CHUNK_SAMPLES * sizeof(int16_t));
+    } else {
+      ++micWarmup;
+    }
+    micRecordIndex = (micRecordIndex + 1) % 3;
+    micSendIndex = (micSendIndex + 1) % 3;
   }
 }
 
@@ -341,6 +437,11 @@ void drawBrows() {
 }
 
 void drawMouth() {
+  if (voiceSpeaking) {
+    const int height = 8 + static_cast<int>((sinf(millis() * 0.018f) + 1.0f) * 7.0f);
+    canvas.fillRoundRect(142, 177 - height / 2, 36, height, height / 2, CYAN);
+    return;
+  }
   switch (mood) {
     case Mood::Happy: canvas.drawArc(160, 168, 28, 23, 20, 160, CYAN); break;
     case Mood::Curious: canvas.fillCircle(160, 179, 7, CYAN); break;
@@ -487,13 +588,24 @@ void handleTouch() {
     touch.x = detail.x;
     touch.y = detail.y;
     touch.startedAt = millis();
+    touch.voiceStarted = false;
   }
   if (touch.tracking && detail.isPressed()) {
     touch.x = detail.x;
     touch.y = detail.y;
+    if (!touch.voiceStarted && screen == Screen::Face &&
+        millis() - touch.startedAt >= 400) {
+      touch.voiceStarted = true;
+      startVoice();
+    }
   }
   if (touch.tracking && detail.wasReleased()) {
     touch.tracking = false;
+    if (touch.voiceStarted) {
+      touch.voiceStarted = false;
+      stopVoice();
+      return;
+    }
     const int deltaX = touch.x - touch.startX;
     const int deltaY = touch.y - touch.startY;
     if (abs(deltaX) > 65 && abs(deltaX) > abs(deltaY)) {
@@ -570,6 +682,7 @@ void loop() {
   const uint32_t now = millis();
   handleTouch();
   serviceHub(now);
+  serviceVoice();
   gazeX += (targetGazeX - gazeX) * 0.14f;
   gazeY += (targetGazeY - gazeY) * 0.14f;
   touchGlow *= 0.92f;

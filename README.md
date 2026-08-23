@@ -32,6 +32,8 @@ CoreS3 Taco
 - Automatic local Wi-Fi or Cloudflare Tunnel connection
 - Battery, Wi-Fi, uptime, and screen-state heartbeat
 - Systemd-managed Taco Hub with health and device APIs
+- Touch-and-hold voice turns with OpenAI Realtime speech-to-speech playback
+- Animated listening, thinking, speaking, and error states
 
 The current PlatformIO firmware lives at the repository root. The Pi gateway
 is in `taco-hub/`, and the device protocol is documented in
