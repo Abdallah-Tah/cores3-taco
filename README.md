@@ -36,6 +36,9 @@ CoreS3 Taco
 - Animated listening, thinking, speaking, and error states
 - Persistent on-device settings for volume, brightness, Wi-Fi, and voice
 - Selectable male Taco voices: Cedar, Ash, Echo, and Verse
+- Restyled face rendering: glowing cyan kawaii eyes with a crescent shadow,
+  cheek accents, and mood-specific accents (sleepy "Zz", curious sparkle).
+  Design references live in `docs/design/faces/`.
 
 The current PlatformIO firmware lives at the repository root. The Pi gateway
 is in `taco-hub/`, and the device protocol is documented in
