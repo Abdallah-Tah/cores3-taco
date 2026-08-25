@@ -36,6 +36,11 @@ CoreS3 Taco
 - Animated listening, thinking, speaking, and error states
 - Persistent on-device settings for volume, brightness, Wi-Fi, and voice
 - Selectable male Taco voices: Cedar, Ash, Echo, and Verse
+- Taco Senses v1: capability controls (listening/camera enforced on-device,
+  memory/habit tracking/cloud AI/kids mode/proactive behavior on the Pi),
+  SQLite-backed storage, on-device IMU step counting and orientation, a
+  pocket-detection heuristic, and an event journal synced over the existing
+  device protocol
 
 The current PlatformIO firmware lives at the repository root. The Pi gateway
 is in `taco-hub/`, and the device protocol is documented in

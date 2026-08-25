@@ -25,6 +25,9 @@ constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
 constexpr uint32_t VOICE_SAMPLE_RATE = 24000;
 constexpr size_t MIC_CHUNK_SAMPLES = 960;
 constexpr size_t SPEAKER_CHUNK_SAMPLES = 2400;
+constexpr float STEP_THRESHOLD_G = 0.22f;
+constexpr uint32_t STEP_REFRACTORY_MS = 280;
+constexpr uint32_t POCKET_TOUCH_TIMEOUT_MS = 5000;
 
 enum class Mood : uint8_t { Happy, Curious, Sleepy, Surprised, Grumpy };
 enum class Screen : uint8_t { Face, Home, Status, Settings };
@@ -84,6 +87,15 @@ uint8_t screenBrightness = 120;
 uint8_t voiceIndex = 0;
 uint32_t wifiConfirmUntil = 0;
 String wifiPortalName;
+uint32_t stepsTotal = 0;
+uint32_t sentStepsTotal = 0;
+bool stepAboveThreshold = false;
+uint32_t lastStepAt = 0;
+const char* orientation = "unknown";
+bool pocketed = false;
+uint32_t lastTouchAt = 0;
+bool listeningEnabled = true;
+bool cameraEnabled = true;
 
 constexpr const char* VOICE_IDS[] = {"cedar", "ash", "echo", "verse", "edge"};
 constexpr const char* VOICE_LABELS[] = {"Cedar", "Ash", "Echo", "Verse", "Edge TTS"};
@@ -182,6 +194,18 @@ void saveSettings() {
   preferences.putUChar("voice", voiceIndex);
 }
 
+void saveCapabilities() {
+  preferences.putBool("cap_listen", listeningEnabled);
+  preferences.putBool("cap_camera", cameraEnabled);
+}
+
+void sendCapabilities() {
+  if (!hubConnected) return;
+  hubSocket.sendTXT(String("{\"type\":\"capabilities\",\"listening\":") +
+                    (listeningEnabled ? "true" : "false") +
+                    ",\"camera\":" + (cameraEnabled ? "true" : "false") + "}");
+}
+
 void sendDeviceSettings() {
   if (!hubConnected) return;
   hubSocket.sendTXT(String("{\"type\":\"settings\",\"voice\":\"") +
@@ -189,7 +213,8 @@ void sendDeviceSettings() {
 }
 
 void beginListening() {
-  if (!conversationActive || voiceRecording || !hubConnected || M5.Speaker.isPlaying()) return;
+  if (!listeningEnabled || !conversationActive || voiceRecording || !hubConnected ||
+      M5.Speaker.isPlaying()) return;
   M5.Speaker.end();
   speakerReady = false;
   M5.Mic.begin();
@@ -207,21 +232,30 @@ void pauseListening() {
   M5.Mic.end();
 }
 
+void stopConversation(const char* reason) {
+  if (!conversationActive) return;
+  conversationActive = false;
+  resumeListeningPending = false;
+  pauseListening();
+  M5.Speaker.end();
+  speakerReady = false;
+  voiceSpeaking = false;
+  if (hubConnected) hubSocket.sendTXT("{\"type\":\"conversation_stop\"}");
+  setMood(Mood::Happy, false);
+  showNotification(reason);
+}
+
 void toggleConversation() {
-  if (!hubConnected) {
-    showNotification("Taco Hub is offline");
+  if (conversationActive) {
+    stopConversation("Conversation ended");
     return;
   }
-  if (conversationActive) {
-    conversationActive = false;
-    resumeListeningPending = false;
-    pauseListening();
-    M5.Speaker.end();
-    speakerReady = false;
-    voiceSpeaking = false;
-    hubSocket.sendTXT("{\"type\":\"conversation_stop\"}");
-    setMood(Mood::Happy, false);
-    showNotification("Conversation ended");
+  if (!listeningEnabled) {
+    showNotification("Listening is off");
+    return;
+  }
+  if (!hubConnected) {
+    showNotification("Taco Hub is offline");
     return;
   }
   conversationActive = true;
@@ -238,6 +272,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
                         AppConfig::DEVICE_ID +
                         "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.4\"}");
       sendDeviceSettings();
+      sendCapabilities();
       showNotification("Taco Hub connected");
       break;
     case WStype_DISCONNECTED:
@@ -280,6 +315,17 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
           voiceSpeaking = false;
           setMood(Mood::Grumpy, false);
           showNotification("Voice service error");
+        } else if (message.indexOf("\"type\":\"capabilities_set\"") >= 0) {
+          const bool wasListening = listeningEnabled;
+          if (message.indexOf("\"listening\":true") >= 0) listeningEnabled = true;
+          else if (message.indexOf("\"listening\":false") >= 0) listeningEnabled = false;
+          if (message.indexOf("\"camera\":true") >= 0) cameraEnabled = true;
+          else if (message.indexOf("\"camera\":false") >= 0) cameraEnabled = false;
+          if (wasListening != listeningEnabled) {
+            saveCapabilities();
+            if (!listeningEnabled) stopConversation("Listening disabled");
+            else showNotification("Listening enabled");
+          }
         }
       }
       break;
@@ -302,6 +348,28 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
     default:
       break;
   }
+}
+
+void serviceMotion(uint32_t now) {
+  float ax = 0.0f, ay = 0.0f, az = 0.0f;
+  if (!M5.Imu.getAccel(&ax, &ay, &az)) return;
+  const float magnitude = sqrtf(ax * ax + ay * ay + az * az);
+
+  if (!stepAboveThreshold && magnitude > 1.0f + STEP_THRESHOLD_G) {
+    stepAboveThreshold = true;
+  } else if (stepAboveThreshold && magnitude < 1.0f - STEP_THRESHOLD_G * 0.5f) {
+    stepAboveThreshold = false;
+    if (now - lastStepAt > STEP_REFRACTORY_MS) {
+      ++stepsTotal;
+      lastStepAt = now;
+    }
+  }
+
+  const bool flat = fabsf(ax) < 0.35f && fabsf(ay) < 0.35f && fabsf(az) > 0.75f;
+  orientation = flat ? (az > 0 ? "face_up" : "face_down") : "on_side";
+
+  pocketed = strcmp(orientation, "face_up") != 0 && !voiceRecording && !voiceSpeaking &&
+             (now - lastTouchAt > POCKET_TOUCH_TIMEOUT_MS);
 }
 
 void serviceVoice() {
@@ -327,10 +395,16 @@ void serviceHub(uint32_t now) {
   }
   if (!hubConnected || now - lastHubStatusAt < 15000) return;
   lastHubStatusAt = now;
+  const uint32_t stepsDelta = stepsTotal - sentStepsTotal;
+  sentStepsTotal = stepsTotal;
   String status = String("{\"type\":\"status\",\"battery\":") +
                   M5.Power.getBatteryLevel() + ",\"rssi\":" + WiFi.RSSI() +
                   ",\"uptime\":" + now / 1000 +
-                  ",\"screen\":\"" + screenName(screen) + "\"}";
+                  ",\"screen\":\"" + screenName(screen) + "\"" +
+                  ",\"steps_total\":" + stepsTotal +
+                  ",\"steps_delta\":" + stepsDelta +
+                  ",\"orientation\":\"" + orientation + "\"" +
+                  ",\"pocketed\":" + (pocketed ? "true" : "false") + "}";
   hubSocket.sendTXT(status);
 }
 
@@ -712,6 +786,7 @@ void handleTouch() {
     targetGazeY *= 0.92f;
     return;
   }
+  lastTouchAt = millis();
   const auto detail = M5.Touch.getDetail(0);
   targetGazeX = clampf((detail.x - 160.0f) / 145.0f, -1.0f, 1.0f);
   targetGazeY = clampf((detail.y - 120.0f) / 105.0f, -1.0f, 1.0f);
@@ -754,6 +829,8 @@ void setup() {
   screenBrightness = preferences.getUChar("brightness", 120);
   voiceIndex = preferences.getUChar("voice", 0);
   if (voiceIndex >= VOICE_COUNT) voiceIndex = 0;
+  listeningEnabled = preferences.getBool("cap_listen", true);
+  cameraEnabled = preferences.getBool("cap_camera", true);
   M5.Display.setRotation(1);
   M5.Display.setBrightness(screenBrightness);
   M5.Speaker.setVolume(speakerVolume);
@@ -812,6 +889,7 @@ void loop() {
   M5.update();
   const uint32_t now = millis();
   handleTouch();
+  serviceMotion(now);
   serviceHub(now);
   serviceVoice();
   gazeX += (targetGazeX - gazeX) * 0.14f;
