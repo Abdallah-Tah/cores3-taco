@@ -29,15 +29,17 @@ options in `publishDiscovery()`.
 
 # Shared Taco face set
 
-Firmware `1.0.0-alpha.7` embeds the eight faces from the approved ChatGPT shared collection as LCD-sized, baseline 4:2:0 JPEG assets. The firmware uses them as follows:
+Firmware `1.0.0-alpha.8` embeds the professional faces from the approved ChatGPT shared collection as LCD-sized, baseline 4:2:0 JPEG assets. The firmware uses them as follows:
 
 - happy: idle
 - startled: conversation wake-up
 - curious: listening
-- sleepy: thinking
-- excited: speaking
+- sleepy: resting or sleeping
+- thinking: processing a question
+- talk closed, small, round and wide: audio-reactive speaking animation
+- excited: loud/emphatic speech
 - surprised: remote surprised mood
 - sad: error mood
 - wink: natural idle blink
 
-The runtime assets are in `assets/faces/`. The two generated exploration strips in `shared/` are design references only and are not loaded by the firmware.
+The runtime assets are in `assets/faces/`. Talking mouth selection follows the average amplitude of each incoming PCM audio chunk. The two generated exploration strips in `shared/` are design references only and are not loaded by the firmware.

@@ -25,6 +25,12 @@ extern const uint8_t faceSadStart[] asm("_binary_assets_faces_sad_jpg_start");
 extern const uint8_t faceSadEnd[] asm("_binary_assets_faces_sad_jpg_end");
 extern const uint8_t faceWinkStart[] asm("_binary_assets_faces_wink_jpg_start");
 extern const uint8_t faceWinkEnd[] asm("_binary_assets_faces_wink_jpg_end");
+extern const uint8_t faceThinkingStart[] asm("_binary_assets_faces_thinking_jpg_start");
+extern const uint8_t faceThinkingEnd[] asm("_binary_assets_faces_thinking_jpg_end");
+extern const uint8_t faceTalkSmallStart[] asm("_binary_assets_faces_talk_small_jpg_start");
+extern const uint8_t faceTalkSmallEnd[] asm("_binary_assets_faces_talk_small_jpg_end");
+extern const uint8_t faceTalkClosedStart[] asm("_binary_assets_faces_talk_closed_jpg_start");
+extern const uint8_t faceTalkClosedEnd[] asm("_binary_assets_faces_talk_closed_jpg_end");
 
 namespace {
 
@@ -81,6 +87,7 @@ bool hubConnected = false;
 bool hubUsingCloudflare = false;
 bool voiceRecording = false;
 bool voiceSpeaking = false;
+uint8_t talkMouthLevel = 0;
 bool conversationActive = false;
 bool resumeListeningPending = false;
 uint32_t resumeListeningAt = 0;
@@ -115,6 +122,11 @@ bool pocketed = false;
 uint32_t lastTouchAt = 0;
 bool listeningEnabled = true;
 bool cameraEnabled = true;
+const uint8_t* renderedFaceAsset = nullptr;
+bool renderedFaceNotificationVisible = false;
+bool renderedFaceHubConnected = false;
+bool renderedFaceConversationActive = false;
+String renderedFaceNotification;
 
 constexpr const char* VOICE_IDS[] = {"cedar", "ash", "echo", "verse", "edge"};
 constexpr const char* VOICE_LABELS[] = {"Cedar", "Ash", "Echo", "Verse", "Edge TTS"};
@@ -191,6 +203,7 @@ void nextMood() {
 
 void setScreen(Screen value, bool announce = true) {
   screen = value;
+  if (value == Screen::Face) renderedFaceAsset = nullptr;
   if (announce) publishScreen();
 }
 
@@ -289,7 +302,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.7\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.8\"}");
       sendDeviceSettings();
       sendCapabilities();
       showNotification("Taco Hub connected");
@@ -322,16 +335,19 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
         } else if (message.indexOf("\"state\":\"speaking\"") >= 0) {
           pauseListening();
           voiceSpeaking = true;
+          talkMouthLevel = 0;
           setMood(Mood::Happy, false);
           showNotification("Taco is speaking");
         } else if (message.indexOf("\"state\":\"idle\"") >= 0) {
           pauseListening();
           resumeListeningPending = false;
           voiceSpeaking = false;
+          talkMouthLevel = 0;
           setMood(Mood::Happy, false);
           notificationUntil = 0;
         } else if (message.indexOf("\"state\":\"error\"") >= 0) {
           voiceSpeaking = false;
+          talkMouthLevel = 0;
           setMood(Mood::Grumpy, false);
           showNotification("Voice service error");
         } else if (message.indexOf("\"type\":\"capabilities_set\"") >= 0) {
@@ -360,6 +376,18 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       const size_t samples = min(length / sizeof(int16_t), SPEAKER_CHUNK_SAMPLES);
       auto* output = speakerBuffers[speakerBufferIndex];
       memcpy(output, payload, samples * sizeof(int16_t));
+      uint32_t magnitudeTotal = 0;
+      size_t magnitudeSamples = 0;
+      for (size_t i = 0; i < samples; i += 8) {
+        magnitudeTotal += abs(static_cast<int32_t>(output[i]));
+        ++magnitudeSamples;
+      }
+      const uint32_t averageMagnitude =
+          magnitudeSamples ? magnitudeTotal / magnitudeSamples : 0;
+      talkMouthLevel = averageMagnitude < 180 ? 0
+                       : averageMagnitude < 700 ? 1
+                       : averageMagnitude < 1800 ? 2
+                                                 : 3;
       M5.Speaker.playRaw(output, samples, VOICE_SAMPLE_RATE, false, 1, 0);
       speakerBufferIndex = (speakerBufferIndex + 1) % 3;
       break;
@@ -692,8 +720,19 @@ void drawFace(uint32_t now) {
     start = faceStartledStart;
     end = faceStartledEnd;
   } else if (voiceSpeaking) {
-    start = faceExcitedStart;
-    end = faceExcitedEnd;
+    if (talkMouthLevel == 0) {
+      start = faceTalkClosedStart;
+      end = faceTalkClosedEnd;
+    } else if (talkMouthLevel == 1) {
+      start = faceTalkSmallStart;
+      end = faceTalkSmallEnd;
+    } else if (talkMouthLevel == 2) {
+      start = faceSurprisedStart;
+      end = faceSurprisedEnd;
+    } else {
+      start = faceExcitedStart;
+      end = faceExcitedEnd;
+    }
   } else if (blinking && !conversationActive && mood == Mood::Happy) {
     start = faceWinkStart;
     end = faceWinkEnd;
@@ -704,8 +743,13 @@ void drawFace(uint32_t now) {
         end = faceCuriousEnd;
         break;
       case Mood::Sleepy:
-        start = faceSleepyStart;
-        end = faceSleepyEnd;
+        if (conversationActive) {
+          start = faceThinkingStart;
+          end = faceThinkingEnd;
+        } else {
+          start = faceSleepyStart;
+          end = faceSleepyEnd;
+        }
         break;
       case Mood::Surprised:
         start = faceSurprisedStart;
@@ -720,6 +764,16 @@ void drawFace(uint32_t now) {
     }
   }
 
+  const bool notificationVisible =
+      !notification.isEmpty() && now < notificationUntil;
+  if (renderedFaceAsset == start &&
+      renderedFaceNotificationVisible == notificationVisible &&
+      (!notificationVisible || renderedFaceNotification == notification) &&
+      renderedFaceHubConnected == hubConnected &&
+      renderedFaceConversationActive == conversationActive) {
+    return;
+  }
+
   canvas.fillScreen(BG);
   const bool faceRendered =
       canvas.drawJpg(start, static_cast<size_t>(end - start), 0, 0, 320, 240);
@@ -732,13 +786,18 @@ void drawFace(uint32_t now) {
   }
   canvas.fillCircle(309, 11, 4,
                     hubConnected ? (conversationActive ? CYAN : CYAN_DIM) : PINK);
-  if (!notification.isEmpty() && now < notificationUntil) {
+  if (notificationVisible) {
     canvas.fillRoundRect(38, 218, 244, 18, 9, PANEL);
     canvas.setTextDatum(middle_center);
     canvas.setTextSize(1);
     canvas.setTextColor(WHITE, PANEL);
     canvas.drawString(notification.substring(0, 38), 160, 227);
   }
+  renderedFaceAsset = start;
+  renderedFaceNotificationVisible = notificationVisible;
+  renderedFaceNotification = notification;
+  renderedFaceHubConnected = hubConnected;
+  renderedFaceConversationActive = conversationActive;
 }
 
 void drawHeader(const char* title) {
