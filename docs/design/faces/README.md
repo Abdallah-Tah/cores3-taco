@@ -26,3 +26,18 @@ in a future expressiveness milestone (e.g. the "Play with my kids" games and
 reactions work), since adding a mood today means touching the `Mood` enum,
 MQTT `parseMood`/`moodName`, and the Home Assistant `select` discovery
 options in `publishDiscovery()`.
+
+# Shared Taco face set
+
+Firmware `1.0.0-alpha.6` embeds the eight faces from the approved ChatGPT shared collection as LCD-sized JPEG assets. The firmware uses them as follows:
+
+- happy: idle
+- startled: conversation wake-up
+- curious: listening
+- sleepy: thinking
+- excited: speaking
+- surprised: remote surprised mood
+- sad: error mood
+- wink: natural idle blink
+
+The runtime assets are in `assets/faces/`. The two generated exploration strips in `shared/` are design references only and are not loaded by the firmware.

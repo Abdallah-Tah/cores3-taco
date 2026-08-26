@@ -9,6 +9,23 @@
 
 #include "AppConfig.h"
 
+extern const uint8_t faceHappyStart[] asm("_binary_assets_faces_happy_jpg_start");
+extern const uint8_t faceHappyEnd[] asm("_binary_assets_faces_happy_jpg_end");
+extern const uint8_t faceStartledStart[] asm("_binary_assets_faces_startled_jpg_start");
+extern const uint8_t faceStartledEnd[] asm("_binary_assets_faces_startled_jpg_end");
+extern const uint8_t faceCuriousStart[] asm("_binary_assets_faces_curious_jpg_start");
+extern const uint8_t faceCuriousEnd[] asm("_binary_assets_faces_curious_jpg_end");
+extern const uint8_t faceExcitedStart[] asm("_binary_assets_faces_excited_jpg_start");
+extern const uint8_t faceExcitedEnd[] asm("_binary_assets_faces_excited_jpg_end");
+extern const uint8_t faceSurprisedStart[] asm("_binary_assets_faces_surprised_jpg_start");
+extern const uint8_t faceSurprisedEnd[] asm("_binary_assets_faces_surprised_jpg_end");
+extern const uint8_t faceSleepyStart[] asm("_binary_assets_faces_sleepy_jpg_start");
+extern const uint8_t faceSleepyEnd[] asm("_binary_assets_faces_sleepy_jpg_end");
+extern const uint8_t faceSadStart[] asm("_binary_assets_faces_sad_jpg_start");
+extern const uint8_t faceSadEnd[] asm("_binary_assets_faces_sad_jpg_end");
+extern const uint8_t faceWinkStart[] asm("_binary_assets_faces_wink_jpg_start");
+extern const uint8_t faceWinkEnd[] asm("_binary_assets_faces_wink_jpg_end");
+
 namespace {
 
 constexpr uint16_t BG = 0x0000;
@@ -54,6 +71,7 @@ Mood mood = Mood::Happy;
 Screen screen = Screen::Face;
 uint32_t nextBlinkAt = 0;
 uint32_t blinkStartedAt = 0;
+uint32_t startledUntil = 0;
 uint32_t lastStatusPublishAt = 0;
 uint32_t lastWiFiAttemptAt = 0;
 uint32_t lastMqttAttemptAt = 0;
@@ -186,7 +204,6 @@ void changeScreen(int direction) {
 void showNotification(const String& message) {
   notification = message.substring(0, 64);
   notificationUntil = millis() + 8000;
-  setMood(Mood::Curious);
 }
 
 void saveSettings() {
@@ -260,6 +277,7 @@ void toggleConversation() {
     return;
   }
   conversationActive = true;
+  startledUntil = millis() + 650;
   hubSocket.sendTXT("{\"type\":\"conversation_start\"}");
   beginListening();
   showNotification("Listening... tap to stop");
@@ -271,7 +289,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.5\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.6\"}");
       sendDeviceSettings();
       sendCapabilities();
       showNotification("Taco Hub connected");
@@ -666,36 +684,52 @@ void drawMoodAccent() {
 }
 
 void drawFace(uint32_t now) {
-  canvas.fillScreen(BG);
-  const float pulse = 0.5f + 0.5f * sinf(now * 0.003f);
-  canvas.fillRoundRect(7, 7, 306, 215, 30, PANEL);
-  canvas.drawRoundRect(7, 7, 306, 215, 30, CYAN_DIM);
-  canvas.drawRoundRect(10, 10, 300, 209, 27,
-                       touchGlow > 0.05f ? WHITE : CYAN);
-  const int glowWidth = 42 + static_cast<int>(pulse * 34);
-  canvas.drawFastHLine(139, 13, glowWidth, CYAN);
+  if (blinking && now - blinkStartedAt >= 220) blinking = false;
+  const uint8_t* start = faceHappyStart;
+  const uint8_t* end = faceHappyEnd;
 
-  canvas.setTextDatum(top_left);
-  canvas.setTextSize(1);
-  canvas.setTextColor(CYAN, PANEL);
-  canvas.drawString(conversationActive ? "TACO  LIVE" : "TACO", 23, 20);
-  canvas.fillCircle(292, 24, 4,
-                    hubConnected ? (conversationActive ? CYAN : CYAN_DIM) : PINK);
-
-  float eyeOpen = mood == Mood::Sleepy ? 0.35f : 1.0f;
-  if (blinking) {
-    const float phase = (now - blinkStartedAt) / 220.0f;
-    eyeOpen *= clampf(fabsf(phase * 2.0f - 1.0f), 0.04f, 1.0f);
-    if (phase >= 1.0f) blinking = false;
+  if (now < startledUntil) {
+    start = faceStartledStart;
+    end = faceStartledEnd;
+  } else if (voiceSpeaking) {
+    start = faceExcitedStart;
+    end = faceExcitedEnd;
+  } else if (blinking && !conversationActive && mood == Mood::Happy) {
+    start = faceWinkStart;
+    end = faceWinkEnd;
+  } else {
+    switch (mood) {
+      case Mood::Curious:
+        start = faceCuriousStart;
+        end = faceCuriousEnd;
+        break;
+      case Mood::Sleepy:
+        start = faceSleepyStart;
+        end = faceSleepyEnd;
+        break;
+      case Mood::Surprised:
+        start = faceSurprisedStart;
+        end = faceSurprisedEnd;
+        break;
+      case Mood::Grumpy:
+        start = faceSadStart;
+        end = faceSadEnd;
+        break;
+      case Mood::Happy:
+        break;
+    }
   }
-  if (mood == Mood::Surprised) eyeOpen = 1.15f;
-  drawBrows();
-  drawEye(100, 111, eyeOpen, gazeX, gazeY, -1);
-  drawEye(220, 111, eyeOpen, gazeX, gazeY, 1);
-  drawMoodAccent();
-  drawMouth();
-  drawNotification();
-  drawPageDots();
+
+  canvas.drawJpg(start, static_cast<size_t>(end - start), 0, 0, 320, 240);
+  canvas.fillCircle(309, 11, 4,
+                    hubConnected ? (conversationActive ? CYAN : CYAN_DIM) : PINK);
+  if (!notification.isEmpty() && now < notificationUntil) {
+    canvas.fillRoundRect(38, 218, 244, 18, 9, PANEL);
+    canvas.setTextDatum(middle_center);
+    canvas.setTextSize(1);
+    canvas.setTextColor(WHITE, PANEL);
+    canvas.drawString(notification.substring(0, 38), 160, 227);
+  }
 }
 
 void drawHeader(const char* title) {
