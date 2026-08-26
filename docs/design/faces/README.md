@@ -29,7 +29,7 @@ options in `publishDiscovery()`.
 
 # Shared Taco face set
 
-Firmware `1.0.0-alpha.6` embeds the eight faces from the approved ChatGPT shared collection as LCD-sized JPEG assets. The firmware uses them as follows:
+Firmware `1.0.0-alpha.7` embeds the eight faces from the approved ChatGPT shared collection as LCD-sized, baseline 4:2:0 JPEG assets. The firmware uses them as follows:
 
 - happy: idle
 - startled: conversation wake-up

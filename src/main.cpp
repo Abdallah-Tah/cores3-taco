@@ -289,7 +289,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.6\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.7\"}");
       sendDeviceSettings();
       sendCapabilities();
       showNotification("Taco Hub connected");
@@ -720,7 +720,16 @@ void drawFace(uint32_t now) {
     }
   }
 
-  canvas.drawJpg(start, static_cast<size_t>(end - start), 0, 0, 320, 240);
+  canvas.fillScreen(BG);
+  const bool faceRendered =
+      canvas.drawJpg(start, static_cast<size_t>(end - start), 0, 0, 320, 240);
+  if (!faceRendered) {
+    canvas.fillRoundRect(8, 8, 304, 224, 28, PANEL);
+    drawBrows();
+    drawEye(100, 111, 1.0f, 0.0f, 0.0f, -1);
+    drawEye(220, 111, 1.0f, 0.0f, 0.0f, 1);
+    drawMouth();
+  }
   canvas.fillCircle(309, 11, 4,
                     hubConnected ? (conversationActive ? CYAN : CYAN_DIM) : PINK);
   if (!notification.isEmpty() && now < notificationUntil) {
