@@ -459,19 +459,24 @@ void serviceNetwork(uint32_t now) {
   if (now - lastStatusPublishAt >= STATUS_PUBLISH_INTERVAL_MS) publishStatus();
 }
 
-void drawEye(int centerX, int centerY, float open, float lookX, float lookY) {
-  constexpr int eyeWidth = 72;
-  const int eyeHeight = max(4, static_cast<int>(68.0f * open));
-  const int y = centerY - eyeHeight / 2;
-  canvas.fillRoundRect(centerX - eyeWidth / 2 - 4, y - 4, eyeWidth + 8,
-                       eyeHeight + 8, min(22, eyeHeight / 2 + 4), CYAN_DIM);
-  canvas.fillRoundRect(centerX - eyeWidth / 2, y, eyeWidth, eyeHeight,
-                       min(18, eyeHeight / 2), BLUE_WHITE);
-  if (eyeHeight <= 18) return;
-  const int pupilX = centerX + static_cast<int>(lookX * 11.0f);
-  const int pupilY = centerY + static_cast<int>(lookY * 8.0f);
-  canvas.fillRoundRect(pupilX - 10, pupilY - 14, 20, 28, 8, 0x18C3);
-  canvas.fillCircle(pupilX - 3, pupilY - 5, 3, WHITE);
+void drawCheekMarks(int centerX, int centerY, int side) {
+  const int baseX = centerX + side * 46;
+  canvas.drawWideLine(baseX, centerY - 8, baseX + side * 10, centerY + 4, 3, CYAN_DIM);
+  canvas.drawWideLine(baseX + side * 10, centerY - 2, baseX + side * 20, centerY + 10, 3,
+                      CYAN_DIM);
+}
+
+void drawEye(int centerX, int centerY, float open, float lookX, float lookY, int side) {
+  const int radius = max(3, static_cast<int>(34.0f * open));
+  canvas.fillCircle(centerX, centerY, radius + 5, CYAN_DIM);
+  canvas.fillCircle(centerX, centerY, radius, BLUE_WHITE);
+  if (radius > 9) {
+    const int shadowX = centerX + static_cast<int>(lookX * 7.0f) + radius / 3;
+    const int shadowY = centerY + static_cast<int>(lookY * 6.0f) + radius / 3;
+    canvas.fillCircle(shadowX, shadowY, static_cast<int>(radius * 0.8f), BG);
+    canvas.fillCircle(centerX - radius / 3, centerY - radius / 3, max(2, radius / 6), WHITE);
+  }
+  drawCheekMarks(centerX, centerY, side);
 }
 
 void drawBrows() {
@@ -559,6 +564,20 @@ void drawNotification() {
   canvas.drawString(notification, 160, 200);
 }
 
+void drawMoodAccent() {
+  if (mood == Mood::Sleepy) {
+    canvas.setTextDatum(middle_center);
+    canvas.setTextColor(CYAN, BG);
+    canvas.setTextSize(1);
+    canvas.drawString("z", 238, 82);
+    canvas.setTextSize(2);
+    canvas.drawString("Z", 252, 66);
+  } else if (mood == Mood::Curious) {
+    canvas.drawWideLine(232, 62, 232, 76, 2, CYAN);
+    canvas.drawWideLine(225, 69, 239, 69, 2, CYAN);
+  }
+}
+
 void drawFace(uint32_t now) {
   canvas.fillScreen(BG);
   const float pulse = 0.5f + 0.5f * sinf(now * 0.003f);
@@ -575,8 +594,9 @@ void drawFace(uint32_t now) {
   }
   if (mood == Mood::Surprised) eyeOpen = 1.15f;
   drawBrows();
-  drawEye(105, 112, eyeOpen, gazeX, gazeY);
-  drawEye(215, 112, eyeOpen, gazeX, gazeY);
+  drawEye(105, 112, eyeOpen, gazeX, gazeY, -1);
+  drawEye(215, 112, eyeOpen, gazeX, gazeY, 1);
+  drawMoodAccent();
   drawMouth();
   drawNotification();
   drawPageDots();
