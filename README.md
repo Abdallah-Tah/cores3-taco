@@ -39,6 +39,11 @@ CoreS3 Taco
 - Restyled face rendering: glowing cyan kawaii eyes with a crescent shadow,
   cheek accents, and mood-specific accents (sleepy "Zz", curious sparkle).
   Design references live in `docs/design/faces/`.
+- Taco Senses v1: capability controls (listening/camera enforced on-device,
+  memory/habit tracking/cloud AI/kids mode/proactive behavior on the Pi),
+  SQLite-backed storage, on-device IMU step counting and orientation, a
+  pocket-detection heuristic, and an event journal synced over the existing
+  device protocol
 
 The current PlatformIO firmware lives at the repository root. The Pi gateway
 is in `taco-hub/`, and the device protocol is documented in

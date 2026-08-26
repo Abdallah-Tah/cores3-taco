@@ -1,6 +1,9 @@
 .pio/
 .venv/
 __pycache__/
+taco-hub/*.db
+taco-hub/*.db-wal
+taco-hub/*.db-shm
 *.py[cod]
 .tools/
 firmware/build/
