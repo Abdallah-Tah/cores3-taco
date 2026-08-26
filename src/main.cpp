@@ -19,6 +19,7 @@ constexpr uint16_t CYAN_DIM = 0x0218;
 constexpr uint16_t WHITE = 0xFFFF;
 constexpr uint16_t BLUE_WHITE = 0xDFFF;
 constexpr uint16_t MUTED = 0x7BEF;
+constexpr uint16_t PINK = 0xF9B7;
 constexpr uint32_t STATUS_PUBLISH_INTERVAL_MS = 30000;
 constexpr uint32_t WIFI_RETRY_INTERVAL_MS = 15000;
 constexpr uint32_t MQTT_RETRY_INTERVAL_MS = 5000;
@@ -270,7 +271,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.4\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.5\"}");
       sendDeviceSettings();
       sendCapabilities();
       showNotification("Taco Hub connected");
@@ -534,21 +535,33 @@ void serviceNetwork(uint32_t now) {
 }
 
 void drawCheekMarks(int centerX, int centerY, int side) {
-  const int baseX = centerX + side * 46;
-  canvas.drawWideLine(baseX, centerY - 8, baseX + side * 10, centerY + 4, 3, CYAN_DIM);
-  canvas.drawWideLine(baseX + side * 10, centerY - 2, baseX + side * 20, centerY + 10, 3,
-                      CYAN_DIM);
+  const int baseX = centerX + side * 48;
+  canvas.drawWideLine(baseX, centerY + 28, baseX + side * 9, centerY + 22, 4, PINK);
+  canvas.drawWideLine(baseX + side * 9, centerY + 31,
+                      baseX + side * 18, centerY + 25, 4, PINK);
 }
 
 void drawEye(int centerX, int centerY, float open, float lookX, float lookY, int side) {
-  const int radius = max(3, static_cast<int>(34.0f * open));
-  canvas.fillCircle(centerX, centerY, radius + 5, CYAN_DIM);
-  canvas.fillCircle(centerX, centerY, radius, BLUE_WHITE);
+  if (mood == Mood::Sleepy && !blinking) {
+    canvas.drawArc(centerX, centerY + 5, 35, 21, 18, 162, CYAN_DIM);
+    canvas.drawArc(centerX, centerY + 5, 32, 18, 18, 162, CYAN);
+    drawCheekMarks(centerX, centerY, side);
+    return;
+  }
+  int baseRadius = mood == Mood::Surprised ? 39 : 36;
+  if (mood == Mood::Curious) baseRadius += side < 0 ? 5 : -2;
+  const int radius = max(3, static_cast<int>(baseRadius * open));
+  canvas.fillCircle(centerX, centerY, radius + 8, PANEL_ACTIVE);
+  canvas.fillCircle(centerX, centerY, radius + 4, CYAN_DIM);
+  canvas.fillCircle(centerX, centerY, radius, CYAN);
   if (radius > 9) {
-    const int shadowX = centerX + static_cast<int>(lookX * 7.0f) + radius / 3;
-    const int shadowY = centerY + static_cast<int>(lookY * 6.0f) + radius / 3;
-    canvas.fillCircle(shadowX, shadowY, static_cast<int>(radius * 0.8f), BG);
-    canvas.fillCircle(centerX - radius / 3, centerY - radius / 3, max(2, radius / 6), WHITE);
+    const int pupilX = centerX + static_cast<int>(lookX * 8.0f);
+    const int pupilY = centerY + static_cast<int>(lookY * 7.0f);
+    const int shadowX = pupilX + radius / 3;
+    const int shadowY = pupilY + radius / 3;
+    canvas.fillCircle(shadowX, shadowY, static_cast<int>(radius * 0.78f), BG);
+    canvas.fillCircle(centerX - radius / 3, centerY - radius / 3, max(3, radius / 6), WHITE);
+    canvas.fillCircle(centerX - 2, centerY - 3, max(2, radius / 10), BLUE_WHITE);
   }
   drawCheekMarks(centerX, centerY, side);
 }
@@ -655,10 +668,19 @@ void drawMoodAccent() {
 void drawFace(uint32_t now) {
   canvas.fillScreen(BG);
   const float pulse = 0.5f + 0.5f * sinf(now * 0.003f);
-  canvas.drawCircle(160, 118, 112, touchGlow > 0.05f ? WHITE : CYAN);
-  canvas.drawCircle(160, 118, 110, CYAN_DIM);
-  canvas.drawArc(160, 118, 117, 115, 210,
-                 210 + static_cast<int>(pulse * 120), CYAN);
+  canvas.fillRoundRect(7, 7, 306, 215, 30, PANEL);
+  canvas.drawRoundRect(7, 7, 306, 215, 30, CYAN_DIM);
+  canvas.drawRoundRect(10, 10, 300, 209, 27,
+                       touchGlow > 0.05f ? WHITE : CYAN);
+  const int glowWidth = 42 + static_cast<int>(pulse * 34);
+  canvas.drawFastHLine(139, 13, glowWidth, CYAN);
+
+  canvas.setTextDatum(top_left);
+  canvas.setTextSize(1);
+  canvas.setTextColor(CYAN, PANEL);
+  canvas.drawString(conversationActive ? "TACO  LIVE" : "TACO", 23, 20);
+  canvas.fillCircle(292, 24, 4,
+                    hubConnected ? (conversationActive ? CYAN : CYAN_DIM) : PINK);
 
   float eyeOpen = mood == Mood::Sleepy ? 0.35f : 1.0f;
   if (blinking) {
@@ -668,8 +690,8 @@ void drawFace(uint32_t now) {
   }
   if (mood == Mood::Surprised) eyeOpen = 1.15f;
   drawBrows();
-  drawEye(105, 112, eyeOpen, gazeX, gazeY, -1);
-  drawEye(215, 112, eyeOpen, gazeX, gazeY, 1);
+  drawEye(100, 111, eyeOpen, gazeX, gazeY, -1);
+  drawEye(220, 111, eyeOpen, gazeX, gazeY, 1);
   drawMoodAccent();
   drawMouth();
   drawNotification();
