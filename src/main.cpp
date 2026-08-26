@@ -31,6 +31,10 @@ extern const uint8_t faceTalkSmallStart[] asm("_binary_assets_faces_talk_small_j
 extern const uint8_t faceTalkSmallEnd[] asm("_binary_assets_faces_talk_small_jpg_end");
 extern const uint8_t faceTalkClosedStart[] asm("_binary_assets_faces_talk_closed_jpg_start");
 extern const uint8_t faceTalkClosedEnd[] asm("_binary_assets_faces_talk_closed_jpg_end");
+extern const uint8_t faceTalkMediumStart[] asm("_binary_assets_faces_talk_medium_jpg_start");
+extern const uint8_t faceTalkMediumEnd[] asm("_binary_assets_faces_talk_medium_jpg_end");
+extern const uint8_t faceTalkWideStart[] asm("_binary_assets_faces_talk_wide_jpg_start");
+extern const uint8_t faceTalkWideEnd[] asm("_binary_assets_faces_talk_wide_jpg_end");
 
 namespace {
 
@@ -302,7 +306,7 @@ void onHubEvent(WStype_t type, uint8_t* payload, size_t length) {
       hubConnected = true;
       hubSocket.sendTXT(String("{\"type\":\"hello\",\"device_id\":\"") +
                         AppConfig::DEVICE_ID +
-                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.8\"}");
+                        "\",\"hardware\":\"CoreS3\",\"firmware\":\"1.0.0-alpha.9\"}");
       sendDeviceSettings();
       sendCapabilities();
       showNotification("Taco Hub connected");
@@ -727,11 +731,11 @@ void drawFace(uint32_t now) {
       start = faceTalkSmallStart;
       end = faceTalkSmallEnd;
     } else if (talkMouthLevel == 2) {
-      start = faceSurprisedStart;
-      end = faceSurprisedEnd;
+      start = faceTalkMediumStart;
+      end = faceTalkMediumEnd;
     } else {
-      start = faceExcitedStart;
-      end = faceExcitedEnd;
+      start = faceTalkWideStart;
+      end = faceTalkWideEnd;
     }
   } else if (blinking && !conversationActive && mood == Mood::Happy) {
     start = faceWinkStart;
